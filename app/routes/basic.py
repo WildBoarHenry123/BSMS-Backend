@@ -1,10 +1,11 @@
 from flask import Blueprint, request
-from app.models import Book,Supplier,SupplyInfo
+from app.models import Book,Supplier,SupplyInfo,VSupplyInfo
 from app.db import db
-from sqlalchemy import text
+from sqlalchemy import text, cast
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 basic_bp = Blueprint('basic', __name__)
+
 @basic_bp.route('/')
 def hello_world():
     """测试后端启动"""
@@ -100,25 +101,17 @@ def book_update():
 def book_delete():
     """删除图书"""
     try:
-        print('-----')
         data = request.json
         isbn = data['isbn']
-        print('-----')
         # 查找图书
         book = Book.query.filter_by(isbn=isbn).first()
-
-        print('-----')
         if not book:
             return {
                 "code": 404,
                 "msg": f"Book with ISBN {isbn} not found.",
             }, 201
-
-        print('-----')
         db.session.delete(book)
         db.session.commit()
-
-        print('-----')
         return {
             "code": 200,
             "msg": "Success.",
@@ -385,10 +378,10 @@ def book_select():
         for book in books:
             book_list.append({
                 'isbn': book.isbn,
-                'title': book.title or '',
+                'title': book.title,
                 'author': book.author or '',
                 'publisher': book.publisher or '',
-                'price': float(book.price) if book.price else 0.0
+                'price': book.price
             })
 
         return {
@@ -454,7 +447,7 @@ def supplier_select():
         for supplier in suppliers:
             supplier_list.append({
                 'supplier_id': supplier.supplier_id,
-                'supplier_name': supplier.supplier_name or ''
+                'supplier_name': supplier.supplier_name
             })
 
         return {
@@ -474,21 +467,73 @@ def supplier_select():
     
 # ========== 供货信息视图接口 ==========
 @basic_bp.route('/supply-info/select', methods=['GET'])
-def supply_info_select():
+def supply_info_view_select():
+    """供货信息视图 - 使用VSupplyInfo视图模型"""
     try:
-        rows = db.session.execute(text("""
-            SELECT supplier_id, supplier_name, isbn, title, author, publisher, supply_price
-            FROM v_supply_info
-        """)).fetchall()
+        # 获取查询参数
+        keyword = request.args.get('keyword', '').strip()
+        limit = request.args.get('limit', 100, type=int)
+        sort_field = request.args.get('sort', 'isbn')
+        sort_dir = request.args.get('dir', 'asc')
+
+        # 验证limit范围
+        if limit <= 0 or limit > 1000:
+            limit = 100
+
+        # 验证排序字段
+        valid_sort_fields = ['supplier_id', 'supplier_name', 'isbn', 'title',
+                             'author', 'publisher', 'supply_price']
+        if sort_field not in valid_sort_fields:
+            sort_field = 'isbn'
+
+        # 验证排序方向
+        if sort_dir not in ['asc', 'desc']:
+            sort_dir = 'asc'
+
+        # 构建基础查询
+        query = VSupplyInfo.query
+
+        # 关键词搜索
+        if keyword:
+            keyword_pattern = f'%{keyword}%'
+            query = query.filter(
+                db.or_(
+                    VSupplyInfo.supplier_name.like(keyword_pattern),
+                    VSupplyInfo.title.like(keyword_pattern),
+                    VSupplyInfo.author.like(keyword_pattern),
+                    VSupplyInfo.publisher.like(keyword_pattern),
+                    VSupplyInfo.isbn.like(keyword_pattern),
+                    cast(VSupplyInfo.supply_price, db.String).like(keyword_pattern)
+                )
+            )
+
+        # 获取总数
+        total_count = query.count()
+
+        # 构建排序
+        sort_column = getattr(VSupplyInfo, sort_field, VSupplyInfo.isbn)
+        if sort_dir == 'desc':
+            sort_column = sort_column.desc()
+
+        # 应用排序和分页
+        supply_infos = query.order_by(sort_column).limit(limit).all()
+
+        # 构建返回数据
+        supply_info_list = []
+        for info in supply_infos:
+            supply_info_list.append(info.to_dict())
 
         return {
             "code": 200,
             "msg": "Success.",
             "data": {
-                "count": len(rows),
-                "list": [dict(row._mapping) for row in rows]
+                "count": total_count,
+                "list": supply_info_list
             }
         }, 200
+
     except Exception as e:
-        return {"code": 400, "msg": f"Fail.Reason:{e}"}, 201
-    
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason:{str(e)}",
+        }, 201

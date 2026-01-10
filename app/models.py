@@ -181,3 +181,257 @@ class ReturnDetail(db.Model):
 
     def __repr__(self):
         return f'<ReturnDetail Return:{self.return_id}, Book:{self.isbn}>'
+    
+
+# 供货信息视图模型
+class VSupplyInfo(db.Model):
+    __tablename__ = 'v_supply_info'
+    __table_args__ = (
+        db.PrimaryKeyConstraint('supplier_id', 'isbn', name='pk_v_supply_info'),
+        {'info': {'is_view': True}}  # 标记为视图
+    )
+    
+    supplier_id = db.Column(db.Integer, nullable=False, comment='供应商编号')
+    supplier_name = db.Column(db.String(100), nullable=False, comment='供应商名称')
+    isbn = db.Column(db.String(13), nullable=False, comment='图书ISBN')
+    title = db.Column(db.String(100), nullable=False, comment='图书名称')
+    author = db.Column(db.String(50), nullable=True, comment='作者')
+    publisher = db.Column(db.String(50), nullable=True, comment='出版社')
+    supply_price = db.Column(db.Numeric(8, 2), nullable=False, comment='供货价')
+    
+    def to_dict(self):
+        return {
+            'supplier_id': self.supplier_id,
+            'supplier_name': self.supplier_name,
+            'isbn': self.isbn,
+            'title': self.title,
+            'author': self.author,
+            'publisher': self.publisher,
+            'supply_price': float(self.supply_price) if self.supply_price else 0.0
+        }
+    
+    def __repr__(self):
+        return f'<VSupplyInfo {self.supplier_name}: {self.title} - ¥{self.supply_price}>'
+    
+# 进货记录视图模型
+class VPurchaseRecord(db.Model):
+    __tablename__ = 'v_purchase_record'
+    
+    # 使用 purchase_id 作为主键
+    __table_args__ = (
+        {'info': {'is_view': True}}  # 标记为视图
+    )
+    
+    purchase_id = db.Column(db.BigInteger, primary_key=True, comment='进货单号')
+    purchase_time = db.Column(db.DateTime, nullable=False, comment='进货时间')
+    supplier_id = db.Column(db.Integer, nullable=False, comment='供应商编号')
+    supplier_name = db.Column(db.String(100), nullable=False, comment='供应商名称')
+    isbn = db.Column(db.String(13), nullable=False, comment='图书ISBN')
+    title = db.Column(db.String(100), nullable=False, comment='图书名称')
+    purchase_qty = db.Column(db.Integer, nullable=False, comment='进货数量')
+    purchase_price = db.Column(db.Numeric(8, 2), nullable=False, comment='进货单价')
+    user_id = db.Column(db.Integer, nullable=False, comment='经手人ID')
+    username = db.Column(db.String(30), nullable=False, comment='经手人用户名')
+    
+    def to_dict(self):
+        return {
+            'purchase_id': self.purchase_id,
+            'purchase_time': self.purchase_time.strftime('%Y-%m-%d %H:%M:%S') if self.purchase_time else None,
+            'supplier_id': self.supplier_id,
+            'supplier_name': self.supplier_name,
+            'isbn': self.isbn,
+            'title': self.title,
+            'purchase_qty': self.purchase_qty,
+            'purchase_price': float(self.purchase_price) if self.purchase_price else 0.0,
+            'user_id': self.user_id,
+            'username': self.username
+        }
+    
+    def __repr__(self):
+        return f'<VPurchaseRecord {self.purchase_id}: {self.title} x{self.purchase_qty}>'
+    
+# 图书库存视图模型
+class VBookInventory(db.Model):
+    __tablename__ = 'v_book_inventory'
+    
+    # 使用 isbn 作为主键
+    __table_args__ = (
+        {'info': {'is_view': True}}  # 标记为视图
+    )
+    
+    isbn = db.Column(db.String(13), primary_key=True, comment='ISBN号')
+    title = db.Column(db.String(100), nullable=False, comment='图书名称')
+    author = db.Column(db.String(50), nullable=True, comment='作者')
+    publisher = db.Column(db.String(50), nullable=True, comment='出版社')
+    price = db.Column(db.Numeric(8, 2), nullable=False, comment='定价')
+    quantity = db.Column(db.Integer, nullable=False, comment='当前库存量')
+    
+    @property
+    def stock_status(self):
+        """库存状态"""
+        if self.quantity <= 0:
+            return '缺货'
+        elif self.quantity <= 5:
+            return '库存紧张'
+        elif self.quantity <= 20:
+            return '库存充足'
+        else:
+            return '库存充裕'
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'isbn': self.isbn,
+            'title': self.title,
+            'author': self.author,
+            'publisher': self.publisher,
+            'price': float(self.price) if self.price else 0.0,
+            'quantity': self.quantity,
+            'stock_status': self.stock_status
+        }
+    
+    def __repr__(self):
+        return f'<VBookInventory {self.title}: {self.quantity}本>'
+
+# 库存紧张预警视图模型
+class VInventoryShortageWarning(db.Model):
+    __tablename__ = 'v_inventory_shortage_warning'
+    
+    # 使用 isbn 作为主键
+    __table_args__ = (
+        {'info': {'is_view': True}}  # 标记为视图
+    )
+    
+    isbn = db.Column(db.String(13), primary_key=True, comment='ISBN号')
+    title = db.Column(db.String(100), nullable=False, comment='图书名称')
+    author = db.Column(db.String(50), nullable=True, comment='作者')
+    publisher = db.Column(db.String(50), nullable=True, comment='出版社')
+    price = db.Column(db.Numeric(8, 2), nullable=False, comment='定价')
+    quantity = db.Column(db.Integer, nullable=False, comment='当前库存量')
+    last_month_sales = db.Column(db.Integer, nullable=False, comment='上月销量')
+    
+    @property
+    def months_of_supply(self):
+        """库存可支撑月数"""
+        if self.last_month_sales == 0:
+            return float('inf')  # 无限
+        return self.quantity / self.last_month_sales
+    
+    @property
+    def warning_level(self):
+        """预警级别"""
+        if self.quantity == 0:
+            return 'critical'  # 严重缺货
+        elif self.months_of_supply <= 0.5:
+            return 'high'  # 高风险
+        elif self.months_of_supply <= 1:
+            return 'medium'  # 中风险
+        else:
+            return 'low'  # 低风险
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'isbn': self.isbn,
+            'title': self.title,
+            'author': self.author,
+            'publisher': self.publisher,
+            'price': float(self.price) if self.price else 0.0,
+            'quantity': self.quantity,
+            'last_month_sales': self.last_month_sales,
+            'months_of_supply': round(self.months_of_supply, 2) if self.months_of_supply != float('inf') else '充足',
+            'warning_level': self.warning_level
+        }
+    
+    def __repr__(self):
+        return f'<VInventoryShortageWarning {self.title}: 库存{self.quantity}, 上月销量{self.last_month_sales}>'
+
+
+# 销售订单视图模型
+class VSalesRecords(db.Model):
+    __tablename__ = 'v_sales_records'
+
+    # 使用 (order_id, isbn) 作为复合主键
+    __table_args__ = (
+        db.PrimaryKeyConstraint('order_id', 'isbn', name='pk_v_sales_records'),
+        {'info': {'is_view': True}}  # 标记为视图
+    )
+
+    order_id = db.Column(db.BigInteger, nullable=False, comment='订单编号')
+    order_time = db.Column(db.DateTime, nullable=False, comment='销售时间')
+    user_id = db.Column(db.Integer, nullable=False, comment='经手人ID')
+    username = db.Column(db.String(30), nullable=False, comment='经手人用户名')
+    isbn = db.Column(db.String(13), nullable=False, comment='图书ISBN')
+    title = db.Column(db.String(100), nullable=False, comment='图书名称')
+    author = db.Column(db.String(50), nullable=True, comment='作者')
+    publisher = db.Column(db.String(50), nullable=True, comment='出版社')
+    order_qty = db.Column(db.Integer, nullable=False, comment='购买数量')
+    order_price = db.Column(db.Numeric(8, 2), nullable=False, comment='成交单价')
+    total_amount = db.Column(db.Numeric(10, 2), nullable=False, comment='订单总金额')
+
+    def to_dict(self):
+        """转换为字典格式"""
+        result = {
+            'order_id': self.order_id,
+            'order_time': self.order_time.strftime('%Y-%m-%d %H:%M:%S') if self.order_time else None,
+            'user_id': self.user_id,
+            'username': self.username,
+            'isbn': self.isbn,
+            'title': self.title,
+            'author': self.author,
+            'publisher': self.publisher,
+            'order_qty': self.order_qty,
+            'order_price': float(self.order_price) if self.order_price else 0.0,
+            'total_amount': float(self.total_amount) if self.total_amount else 0.0
+        }
+        return result
+
+    def __repr__(self):
+        return f'<VSalesRecords 订单{self.order_id}: {self.title} x{self.order_qty}>'
+
+
+# 退货订单视图模型
+class VReturnRecords(db.Model):
+    __tablename__ = 'v_return_records'
+
+    # 使用 (return_id, isbn) 作为复合主键
+    __table_args__ = (
+        db.PrimaryKeyConstraint('return_id', 'isbn', name='pk_v_return_records'),
+        {'info': {'is_view': True}}  # 标记为视图
+    )
+
+    return_id = db.Column(db.BigInteger, nullable=False, comment='退货单号')
+    order_id = db.Column(db.BigInteger, nullable=False, comment='原订单编号')
+    return_time = db.Column(db.DateTime, nullable=False, comment='退货时间')
+    reason = db.Column(db.String(255), nullable=True, comment='退货原因')
+    user_id = db.Column(db.Integer, nullable=False, comment='处理人ID')
+    username = db.Column(db.String(30), nullable=False, comment='处理人用户名')
+    isbn = db.Column(db.String(13), nullable=False, comment='图书ISBN')
+    title = db.Column(db.String(100), nullable=False, comment='图书名称')
+    author = db.Column(db.String(50), nullable=True, comment='作者')
+    publisher = db.Column(db.String(50), nullable=True, comment='出版社')
+    return_qty = db.Column(db.Integer, nullable=False, comment='退货数量')
+    refund_price = db.Column(db.Numeric(8, 2), nullable=False, comment='退款单价')
+    total_amount = db.Column(db.Numeric(10, 2), nullable=False, comment='退货单总金额')
+
+    def to_dict(self):
+        """转换为字典格式"""
+        result = {
+            'return_id': self.return_id,
+            'order_id': self.order_id,
+            'return_time': self.return_time.strftime('%Y-%m-%d %H:%M:%S') if self.return_time else None,
+            'reason': self.reason,
+            'user_id': self.user_id,
+            'username': self.username,
+            'isbn': self.isbn,
+            'title': self.title,
+            'author': self.author,
+            'publisher': self.publisher,
+            'return_qty': self.return_qty,
+            'refund_price': float(self.refund_price) if self.refund_price else 0.0,
+            'total_amount': float(self.total_amount) if self.total_amount else 0.0
+        }
+        return result
+
+    def __repr__(self):
+        return f'<VReturnRecords 退货单{self.return_id}: {self.title} x{self.return_qty}>'

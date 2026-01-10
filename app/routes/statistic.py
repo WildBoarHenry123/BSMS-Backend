@@ -2,8 +2,10 @@ from flask import Blueprint, request
 from sqlalchemy import text
 from datetime import datetime
 from app.db import db
+from app.models import VInventoryShortageWarning, VBookInventory
 
 statistic_bp = Blueprint('statistic', __name__)
+
 
 @statistic_bp.route('/')
 def statistic_hello():
@@ -11,49 +13,146 @@ def statistic_hello():
     return 'statistic module OK'
 
 
-
-# ========== 图书库存视图接口 ==========
 @statistic_bp.route('/stock/select', methods=['GET'])
 def stock_select():
+    """图书库存视图查询 - 连接图书基础信息表、库存表"""
     try:
-        rows = db.session.execute(text("""
-            SELECT isbn, title, author, publisher, price, quantity
-            FROM v_book_inventory
-            ORDER BY quantity ASC
-        """)).fetchall()
+        # 获取查询参数
+        keyword = request.args.get('keyword', '').strip()
+        limit = request.args.get('limit', 50, type=int)
+        sort_field = request.args.get('sort', 'quantity')
+        sort_dir = request.args.get('dir', 'asc')
+
+        # 验证limit范围
+        if limit <= 0 or limit > 500:
+            limit = 50
+
+        # 验证排序字段
+        valid_sort_fields = ['isbn', 'title', 'author', 'publisher', 'price', 'quantity']
+        if sort_field not in valid_sort_fields:
+            sort_field = 'quantity'
+
+        # 验证排序方向
+        if sort_dir not in ['asc', 'desc']:
+            sort_dir = 'asc'
+
+        # 构建基础查询
+        query = VBookInventory.query
+
+        # 关键词搜索（支持图书名称和ISBN搜索）
+        if keyword:
+            keyword_pattern = f'%{keyword}%'
+            query = query.filter(
+                db.or_(
+                    VBookInventory.title.like(keyword_pattern),
+                    VBookInventory.isbn.like(keyword_pattern),
+                    VBookInventory.author.like(keyword_pattern),
+                    VBookInventory.publisher.like(keyword_pattern)
+                )
+            )
+
+        # 获取总数
+        total_count = query.count()
+
+        # 构建排序
+        sort_column = getattr(VBookInventory, sort_field, VBookInventory.quantity)
+        if sort_dir == 'desc':
+            sort_column = sort_column.desc()
+
+        # 应用排序和分页
+        inventory_records = query.order_by(sort_column).limit(limit).all()
+
+        # 构建返回数据
+        inventory_list = []
+        for record in inventory_records:
+            inventory_list.append({
+                'isbn': record.isbn,
+                'title': record.title,
+                'author': record.author,
+                'publisher': record.publisher,
+                'price': float(record.price) if record.price else 0.0,
+                'quantity': record.quantity
+            })
 
         return {
             "code": 200,
             "msg": "Success.",
             "data": {
-                "count": len(rows),
-                "list": [dict(row._mapping) for row in rows]
+                "count": total_count,
+                "list": inventory_list
             }
         }, 200
-    except Exception as e:
-        return {"code": 400, "msg": f"Fail.Reason:{e}"}, 201
 
-# ========== 库存紧张预警视图接口 ==========
+    except Exception as e:
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason:{str(e)}",
+        }, 201
+
+
 @statistic_bp.route('/stock/shortage', methods=['GET'])
 def stock_shortage():
+    """库存紧张预警视图 - 获取急需补货的图书列表"""
     try:
-        rows = db.session.execute(text("""
-            SELECT isbn, title, author, publisher, price, quantity, last_month_sales
-            FROM v_inventory_shortage_warning
-            ORDER BY quantity ASC
-        """)).fetchall()
+        # 获取查询参数
+        keyword = request.args.get('keyword', '').strip()
+        limit = request.args.get('limit', 20, type=int)
+
+        # 验证limit范围
+        if limit <= 0 or limit > 100:
+            limit = 20
+
+        # 构建基础查询
+        query = VInventoryShortageWarning.query
+
+        # 关键词搜索
+        if keyword:
+            keyword_pattern = f'%{keyword}%'
+            query = query.filter(
+                db.or_(
+                    VInventoryShortageWarning.title.like(keyword_pattern),
+                    VInventoryShortageWarning.isbn.like(keyword_pattern),
+                    VInventoryShortageWarning.author.like(keyword_pattern),
+                    VInventoryShortageWarning.publisher.like(keyword_pattern)
+                )
+            )
+
+        # 获取总数
+        total_count = query.count()
+
+        # 应用分页（默认按库存数量升序）
+        shortage_records = query.order_by(
+            VInventoryShortageWarning.quantity.asc()
+        ).limit(limit).all()
+
+        # 构建返回数据
+        shortage_list = []
+        for record in shortage_records:
+            shortage_list.append({
+                'isbn': record.isbn,
+                'title': record.title,
+                'author': record.author,
+                'publisher': record.publisher,
+                'price': float(record.price) if record.price else 0.0,
+                'quantity': record.quantity,
+                'last_month_sales': record.last_month_sales
+            })
 
         return {
             "code": 200,
             "msg": "Success.",
             "data": {
-                "count": len(rows),
-                "list": [dict(row._mapping) for row in rows]
+                "count": total_count,
+                "list": shortage_list
             }
         }, 200
+
     except Exception as e:
-        return {"code": 400, "msg": f"Fail.Reason:{e}"}, 201
-    
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason:{str(e)}",
+        }, 201
+
 
 # ========== 日榜接口 ==========
 @statistic_bp.route('/sales/rank/daily', methods=['GET'])
@@ -138,6 +237,7 @@ def daily_rank():
 
     except Exception as e:
         return {"code": 400, "msg": f"Fail.Reason:{str(e)}"}, 400
+
 
 # ========== 月榜接口 ==========
 @statistic_bp.route('/sales/rank/monthly', methods=['GET'])
