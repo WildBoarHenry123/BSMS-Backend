@@ -3,9 +3,12 @@ import pymysql
 from sqlalchemy import text
 from app.config import Config
 from app.db import db
+from flask_cors import CORS
 
 def create_app():
     app = Flask(__name__)
+    # 允许跨域访问
+    CORS(app, origins=["http://localhost:8848"], supports_credentials=True)
     app.config.from_object('app.config.Config')
     uri = app.config.get('SQLALCHEMY_DATABASE_URI')
     print(uri)
