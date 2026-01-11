@@ -1,5 +1,5 @@
 from flask import Blueprint, request
-from app.models import Book,Supplier,SupplyInfo,VSupplyInfo
+from app.models import Book, Supplier, SupplyInfo, VSupplyInfo, Stock
 from app.db import db
 from sqlalchemy import text, cast
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -44,17 +44,36 @@ def book_insert():
             publisher=data.get('publisher'),
             price=data['price']
         )
+        stock_record = Stock(
+            isbn=data['isbn'],
+            quantity=0  # 初始库存为0
+        )
         db.session.add(new_book)
+        db.session.add(stock_record)
         db.session.commit()
         return {
             "code": 200,
             "msg": "Success.",
         }, 200
+    except IntegrityError as e:
+        db.session.rollback()
+        # 检查是否是主键冲突（图书已存在）
+        if "Duplicate entry" in str(e):
+            return {
+                "code": 400,
+                "msg": f"Book with ISBN {data['isbn']} already exists.",
+            }, 201
+        else:
+            return {
+                "code": 400,
+                "msg": f"Fail. Reason:{str(e)}",
+            }, 201
+
     except Exception as e:
         db.session.rollback()
         return {
             "code": 400,
-            "msg": f"Fail.Reason:{str(e)}",
+            "msg": f"Fail. Reason:{str(e)}",
         }, 201
 
 

@@ -5,6 +5,9 @@ from app.config import Config
 from app.db import db
 from flask_cors import CORS
 
+from app.routes.auth import auth_bp
+
+
 def create_app():
     app = Flask(__name__)
     # 允许跨域访问
@@ -20,6 +23,7 @@ def create_app():
             print("在Flask应用上下文中，数据库连接成功")
         except Exception as e:
             print(f"在Flask应用上下文中，数据库连接失败: {e}")
+    
     register_blueprints(app)
 
 
@@ -33,7 +37,7 @@ def register_blueprints(app):
     from app.routes.order import order_bp
     from app.routes.refund import refund_bp
     from app.routes.statistic import statistic_bp
-
+    app.register_blueprint(auth_bp, url_prefix='/auth')
     app.register_blueprint(basic_bp, url_prefix='/basic')
     app.register_blueprint(purchase_bp, url_prefix='/purchase')
     app.register_blueprint(order_bp, url_prefix='/order')

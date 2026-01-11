@@ -113,7 +113,7 @@ class SupplyInfo(db.Model):
 class Purchase(db.Model):
     __tablename__ = 't_purchase'
 
-    purchase_id = db.Column(db.BigInteger, primary_key=True, comment='进货单号')
+    purchase_id = db.Column(db.BigInteger, primary_key=True, autoincrement=True, comment='进货单号')
     supplier_id = db.Column(db.Integer, db.ForeignKey('t_supplier.supplier_id'), nullable=False, comment='供应商编号')
     isbn = db.Column(db.String(13), db.ForeignKey('t_book.isbn'), nullable=False, comment='图书ISBN')
     purchase_qty = db.Column(db.Integer, nullable=False, comment='进货数量')
@@ -129,7 +129,7 @@ class Purchase(db.Model):
 class Order(db.Model):
     __tablename__ = 't_order'
 
-    order_id = db.Column(db.BigInteger, primary_key=True, comment='订单编号')
+    order_id = db.Column(db.BigInteger, primary_key=True, autoincrement=True, comment='订单编号')
     order_time = db.Column(db.DateTime, nullable=False, default=datetime.now, comment='销售时间')
     user_id = db.Column(db.Integer, db.ForeignKey('t_user.user_id'), nullable=False, comment='经手人ID')
 
@@ -158,7 +158,7 @@ class OrderDetail(db.Model):
 class Return(db.Model):
     __tablename__ = 't_return'
 
-    return_id = db.Column(db.BigInteger, primary_key=True, comment='退货单号')
+    return_id = db.Column(db.BigInteger, primary_key=True, autoincrement=True, comment='退货单号')
     order_id = db.Column(db.BigInteger, db.ForeignKey('t_order.order_id'), nullable=False, comment='原订单编号')
     reason = db.Column(db.String(255), nullable=True, comment='退货原因')
     return_time = db.Column(db.DateTime, nullable=False, default=datetime.now, comment='退货时间')

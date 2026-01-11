@@ -70,7 +70,7 @@ def stock_select():
                 'title': record.title,
                 'author': record.author,
                 'publisher': record.publisher,
-                'price': float(record.price) if record.price else 0.0,
+                'price': float(record.price),
                 'quantity': record.quantity
             })
 
@@ -133,7 +133,7 @@ def stock_shortage():
                 'title': record.title,
                 'author': record.author,
                 'publisher': record.publisher,
-                'price': float(record.price) if record.price else 0.0,
+                'price': float(record.price),
                 'quantity': record.quantity,
                 'last_month_sales': record.last_month_sales
             })
@@ -154,171 +154,183 @@ def stock_shortage():
         }, 201
 
 
-# ========== 日榜接口 ==========
 @statistic_bp.route('/sales/rank/daily', methods=['GET'])
-def daily_rank():
-    from datetime import datetime
-    from decimal import Decimal
-
-    date_str = request.args.get('date')
-    limit = request.args.get('limit', 10, type=int)
-    sort_by = request.args.get('sort_by', 'qty')
-
-    if not date_str:
-        return {"code": 400, "msg": "date参数必填"}, 400
-
+def daily_sales_rank():
+    """图书销售日榜"""
     try:
-        datetime.strptime(date_str, '%Y-%m-%d')
-    except ValueError:
-        return {"code": 400, "msg": "date参数格式应为YYYY-MM-DD"}, 400
+        # 获取查询参数
+        date_str = request.args.get('date', '')
+        sort_by = request.args.get('sort_by', 'qty')
+        limit = request.args.get('limit', 10, type=int)
 
-    if sort_by not in ('qty', 'amount'):
-        return {"code": 400, "msg": "sort_by参数只能是qty或amount"}, 400
-
-    try:
-        rows = db.session.execute(
-            text("CALL proc_daily_rank(:p_date)"),
-            {"p_date": date_str}
-        ).mappings().all()
-
-        if not rows:
+        # 参数验证
+        if not date_str:
             return {
-                "code": 200,
-                "msg": "成功",
-                "data": {"count": 0, "list": []}
-            }, 200
+                "code": 400,
+                "msg": "查询日期不能为空",
+                "data": {}
+            }, 201
 
-        data_list = []
+        # 验证日期格式 (YYYY-MM-DD)
+        try:
+            from datetime import datetime
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return {
+                "code": 400,
+                "msg": "日期格式错误，应为 YYYY-MM-DD",
+                "data": {}
+            }, 201
 
-        for row in rows:
-            book = db.session.execute(
-                text("""
-                    SELECT author, publisher, price
-                    FROM t_book
-                    WHERE isbn = :isbn
-                """),
-                {"isbn": row['isbn']}
-            ).mappings().first()
+        # 验证排序参数
+        if sort_by not in ['qty', 'amount']:
+            sort_by = 'qty'
 
-            total_sales_amount = Decimal('0.00')
-            if book and book['price'] is not None:
-                total_sales_amount = Decimal(row['total_sold']) * book['price']
+        # 验证限制数量
+        if limit <= 0 or limit > 100:
+            limit = 10
 
-            data_list.append({
-                "isbn": row['isbn'],
-                "title": row['title'],
-                "author": book['author'] if book else None,
-                "publisher": book['publisher'] if book else None,
-                "price": float(book['price']) if book else None,
-                "total_sold_qty": row['total_sold'],
-                "total_sales_amount": float(total_sales_amount)
+        # 调用存储过程
+        sql = text("CALL proc_daily_rank(:p_date, :p_sort_by, :p_limit)")
+        result = db.session.execute(sql, {
+            'p_date': date_str,
+            'p_sort_by': sort_by,
+            'p_limit': limit
+        })
+
+        # 获取存储过程返回的结果集
+        rows = result.fetchall()
+
+        # 构建返回数据
+        rank_list = []
+        for i, row in enumerate(rows, 1):
+            rank_list.append({
+                'rank': i,
+                'isbn': row.isbn,
+                'title': row.title,
+                'author': row.author or '',
+                'publisher': row.publisher or '',
+                'price': float(row.price),
+                'total_sold_qty': row.total_sold_qty,
+                'total_sales_amount': float(row.total_sales_amount)
             })
-
-        # 排序
-        key_map = {
-            "qty": lambda x: x['total_sold_qty'],
-            "amount": lambda x: x['total_sales_amount']
-        }
-        data_list.sort(key=key_map[sort_by], reverse=True)
-
-        ranked = []
-        for idx, item in enumerate(data_list[:limit], start=1):
-            item['rank'] = idx
-            ranked.append(item)
 
         return {
             "code": 200,
-            "msg": "成功",
+            "msg": "Success",
             "data": {
-                "count": len(ranked),
-                "list": ranked
+                "count": len(rank_list),
+                "list": rank_list,
             }
         }, 200
 
     except Exception as e:
-        return {"code": 400, "msg": f"Fail.Reason:{str(e)}"}, 400
+        error_msg = str(e)
+        # 提取MySQL错误信息中的有用部分
+        if "MySQL" in error_msg:
+            import re
+            match = re.search(r"'(\d{5})'\):\s*(.*)", error_msg)
+            if match:
+                error_msg = match.group(2)
+
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason: {error_msg}",
+            "data": {}
+        }, 201
 
 
-# ========== 月榜接口 ==========
 @statistic_bp.route('/sales/rank/monthly', methods=['GET'])
-def monthly_rank():
-    import re
-    from decimal import Decimal
-
-    month_str = request.args.get('month')
-    limit = request.args.get('limit', 10, type=int)
-    sort_by = request.args.get('sort_by', 'qty')
-
-    if not month_str:
-        return {"code": 400, "msg": "month参数必填"}, 400
-
-    if not re.match(r'^\d{4}-\d{2}$', month_str):
-        return {"code": 400, "msg": "month参数格式应为YYYY-MM"}, 400
-
-    if sort_by not in ('qty', 'amount'):
-        return {"code": 400, "msg": "sort_by参数只能是qty或amount"}, 400
-
-    year, month = map(int, month_str.split('-'))
-
+def monthly_sales_rank():
+    """图书销售月榜"""
     try:
-        rows = db.session.execute(
-            text("CALL proc_monthly_rank(:p_year, :p_month)"),
-            {"p_year": year, "p_month": month}
-        ).mappings().all()
+        # 获取查询参数
+        month_str = request.args.get('month', '')
+        sort_by = request.args.get('sort_by', 'qty')
+        limit = request.args.get('limit', 10, type=int)
 
-        if not rows:
+        # 参数验证
+        if not month_str:
             return {
-                "code": 200,
-                "msg": "成功",
-                "data": {"count": 0, "list": []}
-            }, 200
+                "code": 400,
+                "msg": "查询月份不能为空",
+                "data": {}
+            }, 201
 
-        data_list = []
+        # 验证月份格式 (YYYY-MM)
+        import re
+        if not re.match(r'^\d{4}-\d{2}$', month_str):
+            return {
+                "code": 400,
+                "msg": "月份格式错误，应为 YYYY-MM",
+                "data": {}
+            }, 201
 
-        for row in rows:
-            book = db.session.execute(
-                text("""
-                    SELECT author, publisher, price
-                    FROM t_book
-                    WHERE isbn = :isbn
-                """),
-                {"isbn": row['isbn']}
-            ).mappings().first()
+        # 验证月份有效性
+        try:
+            year, month = map(int, month_str.split('-'))
+            if month < 1 or month > 12:
+                raise ValueError
+        except ValueError:
+            return {
+                "code": 400,
+                "msg": "月份无效，应为 01-12",
+                "data": {}
+            }, 201
 
-            total_sales_amount = Decimal('0.00')
-            if book and book['price'] is not None:
-                total_sales_amount = Decimal(row['total_sold']) * book['price']
+        # 验证排序参数
+        if sort_by not in ['qty', 'amount']:
+            sort_by = 'qty'
 
-            data_list.append({
-                "isbn": row['isbn'],
-                "title": row['title'],
-                "author": book['author'] if book else None,
-                "publisher": book['publisher'] if book else None,
-                "price": float(book['price']) if book else None,
-                "total_sold_qty": row['total_sold'],
-                "total_sales_amount": float(total_sales_amount)
+        # 验证限制数量
+        if limit <= 0 or limit > 100:
+            limit = 10
+
+        # 调用存储过程
+        sql = text("CALL proc_monthly_rank(:p_date, :p_sort_by, :p_limit)")
+        result = db.session.execute(sql, {
+            'p_date': month_str,
+            'p_sort_by': sort_by,
+            'p_limit': limit
+        })
+
+        # 获取存储过程返回的结果集
+        rows = result.fetchall()
+
+        # 构建返回数据
+        rank_list = []
+        for i, row in enumerate(rows, 1):
+            rank_list.append({
+                'rank': i,
+                'isbn': row.isbn,
+                'title': row.title,
+                'author': row.author or '',
+                'publisher': row.publisher or '',
+                'price': float(row.price),
+                'total_sold_qty': row.total_sold_qty,
+                'total_sales_amount': float(row.total_sales_amount)
             })
-
-        # 排序
-        key_map = {
-            "qty": lambda x: x['total_sold_qty'],
-            "amount": lambda x: x['total_sales_amount']
-        }
-        data_list.sort(key=key_map[sort_by], reverse=True)
-
-        ranked = []
-        for idx, item in enumerate(data_list[:limit], start=1):
-            item['rank'] = idx
-            ranked.append(item)
 
         return {
             "code": 200,
-            "msg": "成功",
+            "msg": "Success",
             "data": {
-                "count": len(ranked),
-                "list": ranked
+                "count": len(rank_list),
+                "list": rank_list
             }
         }, 200
 
     except Exception as e:
-        return {"code": 400, "msg": f"Fail.Reason:{str(e)}"}, 400
+        error_msg = str(e)
+        # 提取MySQL错误信息中的有用部分
+        if "MySQL" in error_msg:
+            import re
+            match = re.search(r"'(\d{5})'\):\s*(.*)", error_msg)
+            if match:
+                error_msg = match.group(2)
+
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason: {error_msg}",
+            "data": {}
+        }, 201

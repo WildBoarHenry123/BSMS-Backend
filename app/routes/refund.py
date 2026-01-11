@@ -1,3 +1,5 @@
+import json
+
 from flask import Blueprint, request
 from sqlalchemy import text, cast, String
 import random, time
@@ -106,7 +108,7 @@ def refund_select():
                     'reason': record.reason,
                     'user_id': record.user_id,
                     'username': record.username,
-                    'total_amount': float(record.total_amount) if record.total_amount else 0.0,
+                    'total_amount': float(record.total_amount),
                     'details': []
                 }
 
@@ -116,7 +118,7 @@ def refund_select():
                 'title': record.title,
                 'author': record.author,
                 'publisher': record.publisher,
-                'refund_price': float(record.refund_price) if record.refund_price else 0.0,
+                'refund_price': float(record.refund_price),
                 'return_qty': record.return_qty
             })
 
@@ -152,66 +154,62 @@ def generate_return_id():
             return candidate_id
     return int(time.time() * 1000) * 100 + random.randint(1000, 9999)
 
+
 @refund_bp.route('/insert', methods=['POST'])
-def return_insert():
-    data = request.get_json(silent=True) or {}
-    order_id = data.get('order_id')
-    user_id = data.get('user_id')
-    reason = data.get('reason', '')
-    details = data.get('details', [])
-
-    if not order_id or not user_id or not details:
-        return {"code": 400, "msg": "order_id, user_id, and details are required"}, 400
-
+def refund_insert():
+    """登记退货 - 调用存储过程 proc_return_insert"""
     try:
-        for item in details:
-            isbn = item.get('isbn')
-            return_qty = item.get('return_qty')
+        data = request.json
 
-            if not isbn or return_qty is None:
-                return {"code": 400, "msg": "Each detail must contain isbn and return_qty"}, 400
-            try:
-                return_qty = int(return_qty)
-            except (TypeError, ValueError):
-                return {"code": 400, "msg": "return_qty must be an integer"}, 400
-            if return_qty <= 0:
-                return {"code": 400, "msg": "return_qty must be > 0"}, 400
+        # 获取参数
+        order_id = data.get('order_id')
+        user_id = data.get('user_id')
+        reason = data.get('reason', '')
+        details = data.get('details', [])
 
-            # 生成唯一退货单ID
-            return_id = generate_return_id()
+        # 将details转换为JSON字符串
+        details_json = json.dumps(details)
 
-            # 调用存储过程
-            db.session.execute(
-                text("CALL proc_return_book(:return_id, :order_id, :isbn, :qty, :reason, :user_id)"),
-                {
-                    "return_id": return_id,
-                    "order_id": order_id,
-                    "isbn": isbn,
-                    "qty": return_qty,
-                    "reason": reason,
-                    "user_id": user_id
-                }
-            )
+        # 调用存储过程
+        sql = text("CALL proc_return_insert(:order_id, :user_id, :reason, :details_json)")
+        result = db.session.execute(sql, {
+            'order_id': order_id,
+            'user_id': user_id,
+            'reason': reason,
+            'details_json': details_json
+        })
 
+        # 获取存储过程返回的结果
+        proc_result = result.fetchone()
         db.session.commit()
-        return {
-            "code": 200,
-            "msg": "成功",
-            "data": {
-                "order_id": order_id,
-                "user_id": user_id,
-                "total_items": len(details)
-            }
-        }, 200
+
+        # 构建返回信息
+        if proc_result and proc_result.result_code == 0:
+            return {
+                "code": 200,
+                "msg": proc_result.result_message,
+                "data": {
+                    "return_id": proc_result.return_id,
+                    "detail_count": proc_result.detail_count
+                }
+            }, 200
+        else:
+            return {
+                "code": 400,
+                "msg": proc_result.result_message if proc_result else "退货失败"
+            }, 201
 
     except Exception as e:
         db.session.rollback()
-        err_text = str(e)
-        #解析存储过程 SIGNAL 错误，返回提示
-        if "return quantity exceeds sold quantity" in err_text:
-            return {"code": 400, "msg": "退货数量超过已售数量"}, 400
-        if "order detail not found" in err_text:
-            return {"code": 400, "msg": "订单明细不存在"}, 400
-        return {"code": 400, "msg": f"Fail.Reason:{err_text}"}, 400
-
-    
+        error_msg = str(e)
+        # 提取MySQL错误信息中的有用部分
+        if "MySQL" in error_msg:
+            # 尝试提取MySQL错误消息
+            import re
+            match = re.search(r"'(\d{5})'\):\s*(.*)", error_msg)
+            if match:
+                error_msg = match.group(2)
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason:{error_msg}",
+        }, 201

@@ -1,3 +1,5 @@
+import json
+
 from flask import Blueprint, request
 from sqlalchemy import text, cast, String
 from app.db import db
@@ -108,7 +110,7 @@ def order_select():
                     'order_time': record.order_time.strftime('%Y-%m-%d %H:%M:%S') if record.order_time else None,
                     'user_id': record.user_id,
                     'username': record.username,
-                    'total_amount': float(record.total_amount) if record.total_amount else 0.0,
+                    'total_amount': float(record.total_amount),
                     'details': []
                 }
 
@@ -118,7 +120,7 @@ def order_select():
                 'title': record.title,
                 'author': record.author,
                 'publisher': record.publisher,
-                'order_price': float(record.order_price) if record.order_price else 0.0,
+                'order_price': float(record.order_price),
                 'order_qty': record.order_qty
             })
 
@@ -140,59 +142,59 @@ def order_select():
             "msg": f"Fail.Reason:{str(e)}",
         }, 201
 
-# ========= 登记销售接口 ==========
-# def generate_order_id():
-#     """生成唯一订单ID"""
-#     # 基础部分：年月日时分秒
-#     base_id = int(datetime.now().strftime("%Y%m%d%H%M%S"))
-#
-#     # 添加随机部分（0-999）
-#     for _ in range(10):  # 尝试10次
-#         candidate_id = base_id * 1000 + random.randint(0, 999)
-#
-#         # 检查是否已存在
-#         exists = db.session.execute(
-#             text("SELECT COUNT(*) FROM t_order WHERE order_id = :order_id"),
-#             {"order_id": candidate_id}
-#         ).scalar()
-#
-#         if not exists:
-#             return candidate_id
-#
-#     # 如果所有尝试都失败，使用时间戳+进程ID
-#     return int(time.time() * 1000) * 100 + random.randint(1000, 9999)
-#
-# @order_bp.route('/insert', methods=['POST'])
-# def order_insert():
-#     data = request.get_json()
-#     user_id = data.get('user_id')
-#     details = data.get('details', [])
-#
-#     if not user_id or not details:
-#         return {"code": 400, "msg": "user_id and details are required"}, 400
-#
-#     try:
-#         # 生成唯一订单ID
-#         order_id = generate_order_id()
-#
-#         # 创建订单
-#         db.session.execute(
-#             text("INSERT INTO t_order (order_id, order_time, user_id) VALUES (:order_id, NOW(), :user_id)"),
-#             {"order_id": order_id, "user_id": user_id}
-#         )
-#
-#
-#         db.session.commit()
-#         return {
-#             "code": 200,
-#             "msg": "成功",
-#             "data": {
-#                 "order_id": order_id,
-#                 "user_id": user_id,
-#                 "total_items": len(details)
-#             }
-#         }, 200
-#
-#     except Exception as e:
-#         db.session.rollback()
-#         return {"code": 400, "msg": f"Fail.Reason:{str(e)}"}, 400
+
+@order_bp.route('/insert', methods=['POST'])
+def order_insert():
+    """登记销售 - 调用存储过程 proc_order_insert"""
+    try:
+        data = request.json
+
+        # 获取参数
+        user_id = data.get('user_id')
+        details = data.get('details', [])
+
+        # 将details转换为JSON字符串
+        details_json = json.dumps(details)
+
+        # 调用存储过程
+        sql = text("CALL proc_order_insert(:user_id, :details_json)")
+        result = db.session.execute(sql, {
+            'user_id': user_id,
+            'details_json': details_json
+        })
+
+        # 获取存储过程返回的结果
+        proc_result = result.fetchone()
+        db.session.commit()
+
+        # 构建返回信息
+        if proc_result and proc_result.result_code == 0:
+            return {
+                "code": 200,
+                "msg": proc_result.result_message,
+                "data": {
+                    "order_id": proc_result.order_id,
+                    "total_amount": float(proc_result.total_amount),
+                    "detail_count": proc_result.detail_count
+                }
+            }, 200
+        else:
+            return {
+                "code": 400,
+                "msg": proc_result.result_message if proc_result else "销售失败"
+            }, 201
+
+    except Exception as e:
+        db.session.rollback()
+        error_msg = str(e)
+        # 提取MySQL错误信息中的有用部分
+        if "MySQL" in error_msg:
+            # 尝试提取MySQL错误消息
+            import re
+            match = re.search(r"'(\d{5})'\):\s*(.*)", error_msg)
+            if match:
+                error_msg = match.group(2)
+        return {
+            "code": 400,
+            "msg": f"Fail.Reason:{error_msg}",
+        }, 201
